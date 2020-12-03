@@ -1,3 +1,12 @@
+import { LiveTrack } from 'flyxc/common/protos/live-track';
+import {
+  getFixDevice,
+  getFixMessage,
+  isEmergencyFix,
+  isLowBatFix,
+  isValidFix,
+  trackerDisplayNames,
+} from 'flyxc/common/src/live-track';
 import {
   CSSResult,
   customElement,
@@ -10,10 +19,11 @@ import {
 } from 'lit-element';
 import { connect } from 'pwa-helpers';
 
-import { linearInterpolate } from '../../logic/math';
 import { formatUnit, Units } from '../../logic/units';
 import { setDisplayLiveNames } from '../../redux/app-slice';
+import { liveTrackSelectors, updateTrackers } from '../../redux/live-track-slice';
 import { RootState, store } from '../../redux/store';
+import { getUniqueColor } from '../../styles/track';
 import { controlStyle } from '../control-style';
 
 // Anchors and label origins for markers.
@@ -23,20 +33,23 @@ let ORIGIN_ARROW: google.maps.Point | undefined;
 let ANCHOR_MSG: google.maps.Point | undefined;
 let ORIGIN_MSG: google.maps.Point | undefined;
 
+// A track is considered recent if ended less than timeout ago.
+const RECENT_TIMEOUT_MIN = 2 * 60;
+
 const positionSvg = (color: string, opacity: number): string =>
   `<svg xmlns="http://www.w3.org/2000/svg" height="9" width="9">` +
-  `<circle r="3" cx="4" cy="4" style="fill:${color};stroke:black;stroke-width:1" opacity="${opacity}"/>` +
+  `<circle r="3" cx="4" cy="4" fill="${color}" stroke="black" stroke-width="1" opacity="${opacity}"/>` +
   `</svg>`;
 
 const arrowSvg = (angle: number, color: string, opacity: number) =>
   `<svg xmlns="http://www.w3.org/2000/svg" height="19" width="19">` +
-  `<path d='M9 3 l-5 13 l5 -3 l5 3z' style="fill:${color};stroke:black;stroke-width:1"` +
+  `<path d='M9 3 l-5 13 l5 -3 l5 3z' fill="${color}" stroke="black" stroke-width="1"` +
   ` transform="rotate(${angle}, 9, 9)"  opacity="${opacity}"/>` +
   `</svg>`;
 
 const msgSvg = (color: string, opacity: number): string =>
   `<svg xmlns="http://www.w3.org/2000/svg" height="16" width="16">` +
-  `<path style="fill:${color};stroke:black;stroke-width:1" opacity="${opacity}"` +
+  `<path fill="${color}" stroke="black" stroke-width="1" opacity="${opacity}"` +
   ` d="M2.5 2C1.7 2 1 2.7 1 3.5 l 0 8 c0 .8.7 1.5 1.5 1.5 H4 l 0 2.4 L 7.7 13 l 4.8 0 c.8 0 1.5 -.7 1.5 -1.5 l 0 -8 c 0 -.8 -.7 -1.5 -1.5 -1.5 z"/>` +
   `</svg>`;
 
@@ -56,11 +69,14 @@ export class TrackingElement extends connect(store)(LitElement) {
   @internalProperty()
   private displayNames = true;
 
+  @internalProperty()
+  private geojson: any;
+
   private units?: Units;
   private info?: google.maps.InfoWindow;
   // Name of the pilot shown in the info window.
-  private currentName?: string;
-  private features: any[] = [];
+  private currentId?: number;
+  private features: google.maps.Data.Feature[] = [];
   private fetchTimer?: number;
 
   connectedCallback(): void {
@@ -68,19 +84,27 @@ export class TrackingElement extends connect(store)(LitElement) {
     // At this point the api has been loaded.
     ANCHOR_POSITION = new google.maps.Point(4, 4);
     ANCHOR_ARROW = new google.maps.Point(9, 9);
-    ORIGIN_ARROW = new google.maps.Point(9, 22);
+    ORIGIN_ARROW = new google.maps.Point(9, 36);
     ANCHOR_MSG = new google.maps.Point(7, 9);
     ORIGIN_MSG = new google.maps.Point(0, 22);
     this.setMapStyle(this.gMap);
     this.setupInfoWindow(this.gMap);
   }
 
+  disconnectedCallback(): void {
+    super.disconnectedCallback();
+    if (this.fetchTimer != null) {
+      clearInterval(this.fetchTimer);
+      this.fetchTimer = undefined;
+    }
+  }
+
   shouldUpdate(changedProps: PropertyValues): boolean {
     if (changedProps.has('isVisible')) {
       if (this.isVisible) {
         if (this.fetchTimer == null) {
-          this.fetchTrackers();
-          this.fetchTimer = window.setInterval(() => this.fetchTrackers(), 2 * 60 * 1000);
+          store.dispatch(updateTrackers());
+          this.fetchTimer = window.setInterval(() => store.dispatch(updateTrackers()), 2 * 60 * 1000);
         }
       } else {
         if (this.fetchTimer != null) {
@@ -90,6 +114,12 @@ export class TrackingElement extends connect(store)(LitElement) {
       }
       changedProps.delete('isVisible');
     }
+    if (changedProps.has('geojson')) {
+      const features = this.features;
+      this.features = this.gMap.data.addGeoJson(this.geojson) || [];
+      features.forEach((f) => this.gMap.data.remove(f));
+      changedProps.delete('geojson');
+    }
     return super.shouldUpdate(changedProps);
   }
 
@@ -97,65 +127,67 @@ export class TrackingElement extends connect(store)(LitElement) {
     this.units = state.units;
     this.displayNames = state.app.displayLiveNames;
     this.isVisible = state.browser.isVisible;
+    this.geojson = state.liveTrack.geojson;
   }
 
   static get styles(): CSSResult {
     return controlStyle;
   }
 
-  private fetchTrackers(): void {
-    fetch('_trackers.geojson')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((geoJson) => {
-        if (geoJson != null) {
-          const features = this.features;
-          this.features = this.gMap.data.addGeoJson(geoJson) || [];
-          features.forEach((f) => this.gMap.data.remove(f));
-        }
-      });
-  }
-
   private setupInfoWindow(map: google.maps.Map): void {
-    const hasPointFeature = (event: any): boolean => event.feature?.getGeometry().getType() == 'Point';
     this.info = new google.maps.InfoWindow();
     this.info.close();
     this.info.addListener('closeclick', () => {
-      this.currentName = undefined;
+      this.currentId = undefined;
       this.setMapStyle(this.gMap);
     });
 
-    map.data.addListener('click', (event: any) => {
-      if (hasPointFeature(event)) {
-        const feat = event.feature as any;
-        const latLng: google.maps.LatLng = feat.getGeometry().get();
-        const date = new Date(feat.getProperty('ts'));
+    map.data.addListener('click', (event) => {
+      const feature: google.maps.Data.Feature | undefined = event.feature;
+      if (feature?.getGeometry().getType() == 'Point') {
+        const id = Number(feature.getProperty('id') ?? 0);
+        const track = liveTrackSelectors.selectById(store.getState(), id) as LiveTrack;
+        const index = feature.getProperty('index') ?? 0;
+        const message = getFixMessage(track, index);
+        const flags = track.flags[index];
+        const alt = track.alt[index];
+        const speed = track.extra[index]?.speed;
+        const date = new Date(track.timeSec[index] * 1000);
+
         const content: string[] = [
-          `<strong>${feat.getProperty('name')}</strong>`,
-          `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`,
-          `${formatUnit(feat.getProperty('alt'), this.units?.altitude)} ${
-            feat.getProperty('speed') != null ? formatUnit(feat.getProperty('speed'), this.units?.speed) : ''
-          }`,
-          `<a href=${`https://www.google.com/maps/dir//${latLng.lat()},${latLng.lng()}`} target="_blank">Directions</a>`,
+          `<strong>${track.name}</strong>`,
+          `<i class="las la-clock"></i> ${date.toLocaleDateString()} ${date.toLocaleTimeString()}`,
+          `<i class="las la-arrow-up"></i> ${formatUnit(alt, this.units?.altitude)}`,
         ];
-        if (feat.getProperty('msg')) {
-          content.push(feat.getProperty('msg'));
+        if (speed != null) {
+          content.push(`<i class="las la-tachometer-alt"></i> ${formatUnit(speed, this.units?.speed)}`);
         }
-        if (feat.getProperty('emergency')) {
-          content.push('<strong>Emergency</strong>');
+        content.push(
+          `<i class="las la-map-marked"></i> <a href=${`https://www.google.com/maps/dir//${track.lat[index]},${track.lon[index]}`} target="_blank">Directions</a>`,
+        );
+        if (message != null) {
+          content.push(`<i class="las la-sms"></i> “${message}”`);
         }
-        if (feat.getProperty('valid') === false) {
+        if (isEmergencyFix(flags)) {
+          content.push('<i class="las la-first-aid"></i> <strong>Emergency</strong>');
+        }
+        if (isLowBatFix(flags)) {
+          content.push('<i class="las la-battery-empty"></i> Low Battery.');
+        }
+        if (!isValidFix(flags)) {
           content.push(
-            '<strong>WARNING:',
+            '<i class="las la-exclamation-circle"></i> <strong>Warning</strong>',
             'The GPS fix is reported as invalid.',
-            'The actual location might be different.</strong>',
+            'The actual location might be different.',
           );
         }
+        content.push(`<i class="las la-satellite-dish"></i> ${trackerDisplayNames[getFixDevice(flags)]}`);
 
         if (this.info) {
           this.info.setContent(content.join('<br>'));
           this.info.setPosition(event.latLng);
           this.info.open(map);
-          this.currentName = feat.getProperty('name');
+          this.currentId = id;
           this.setMapStyle(this.gMap);
         }
       }
@@ -167,7 +199,7 @@ export class TrackingElement extends connect(store)(LitElement) {
       (feature: google.maps.Data.Feature): google.maps.Data.StyleOptions => {
         switch (feature.getGeometry().getType()) {
           case 'Point':
-            return this.getFixStyle(feature);
+            return this.getPointStyle(feature);
           case 'LineString':
             return this.getTrackStyle(feature);
           default:
@@ -178,46 +210,61 @@ export class TrackingElement extends connect(store)(LitElement) {
   }
 
   // Using data-url with icon is much faster than using symbols.
-  private getFixStyle(feature: google.maps.Data.Feature): google.maps.Data.StyleOptions {
-    const now = Date.now();
-    const ts = feature.getProperty('ts');
-    const minutesOld = Math.round((now - ts) / (60 * 1000));
-    const s = Math.max(0, Math.round(linearInterpolate(0, 100, 5 * 60, 0, minutesOld)));
-    let color = `hsl(111, ${s}%, 53%)`;
-    let opacity = minutesOld > 12 * 60 ? 0.3 : 0.9;
+  private getPointStyle(feature: google.maps.Data.Feature): google.maps.Data.StyleOptions {
+    const nowSec = Date.now() / 1000;
+    const id = Number(feature.getProperty('id') ?? 0);
+    const track = liveTrackSelectors.selectById(store.getState(), id) as LiveTrack;
+    const index = feature.getProperty('index') ?? 0;
+    const message = getFixMessage(track, index);
+    const isEmergency = isEmergencyFix(track.flags[index]);
+    const heading = feature.getProperty('heading');
+
+    const ageMin = Math.round((nowSec - (track?.timeSec[index] ?? 0)) / 60);
+
+    let opacity = ageMin > RECENT_TIMEOUT_MIN ? 0.3 : 0.9;
+    const color = getUniqueColor(Math.round(id / 1000));
     let labelColor = 'black';
     let svg: string | undefined;
     let labelOrigin: google.maps.Point | undefined;
     let anchor: google.maps.Point | undefined;
     let zIndex = 10;
 
-    if (feature.getProperty('name') === this.currentName) {
+    if (id === this.currentId) {
       opacity = 0.9;
-      color = 'darkred';
       labelColor = 'darkred';
-      zIndex = 50;
-    }
-
-    // Display an arrow when we have a bearing (most recent point).
-    if (feature.getProperty('bearing') != null) {
-      anchor = ANCHOR_ARROW;
-      labelOrigin = ORIGIN_ARROW;
-      svg = arrowSvg(Number(feature.getProperty('bearing')), color, opacity);
-    }
-
-    // Display speech bubble for messages and emergency.
-    if (feature.getProperty('msg')) {
-      anchor = ANCHOR_MSG;
-      labelOrigin = ORIGIN_MSG;
-      svg = msgSvg('yellow', opacity);
       zIndex = 20;
     }
 
-    if (feature.getProperty('emergency')) {
+    let label: google.maps.MarkerLabel | undefined;
+    // Display an arrow when we have a bearing (most recent point).
+    if (heading != null) {
+      anchor = ANCHOR_ARROW;
+      labelOrigin = ORIGIN_ARROW;
+      svg = arrowSvg(heading, color, opacity);
+      // Display the pilot name.
+      if (this.displayNames && (id === this.currentId || ageMin < 12 * 60)) {
+        const age = ageMin < 60 ? `${ageMin}min` : `${Math.floor(ageMin / 60)}h${String(ageMin % 60).padStart(2, '0')}`;
+        label = {
+          color: labelColor,
+          text: track.name + '\n-' + age,
+          className: 'gm-label-outline',
+        } as any;
+      }
+    }
+
+    // Display speech bubble for messages and emergency.
+    if (message) {
+      anchor = ANCHOR_MSG;
+      labelOrigin = ORIGIN_MSG;
+      svg = msgSvg('yellow', opacity);
+      zIndex = 50;
+    }
+
+    if (isEmergency) {
       anchor = ANCHOR_MSG;
       labelOrigin = ORIGIN_MSG;
       svg = msgSvg('red', 1);
-      zIndex = 30;
+      zIndex = 60;
     }
 
     // Simple dots for every other positions.
@@ -226,28 +273,12 @@ export class TrackingElement extends connect(store)(LitElement) {
       anchor = ANCHOR_POSITION;
     }
 
-    // Display the pilot name.
-    let label: google.maps.MarkerLabel | undefined;
-    if (feature.getProperty('is_last_fix') === true) {
-      if (this.displayNames) {
-        const age =
-          minutesOld < 60
-            ? `${minutesOld}min`
-            : `${Math.floor(minutesOld / 60)}h${String(minutesOld % 60).padStart(2, '0')}`;
-        label = {
-          color: labelColor,
-          text: feature.getProperty('name') + ' · ' + age,
-          className: 'gm-label-outline',
-        } as any;
-      }
-    }
-
     return {
       label,
       zIndex,
       cursor: 'zoom-in',
       icon: {
-        url: `data:image/svg+xml,${svg}`,
+        url: `data:image/svg+xml;base64,${btoa(svg)}`,
         anchor,
         labelOrigin,
       },
@@ -255,25 +286,27 @@ export class TrackingElement extends connect(store)(LitElement) {
   }
 
   private getTrackStyle(feature: google.maps.Data.Feature): google.maps.Data.StyleOptions {
-    const now = Date.now();
-    const ts = feature.getProperty('first_ts');
-    const minutesOld = Math.round((now - ts) / (60 * 1000));
-    let opacity = minutesOld > 12 * 60 ? 0.3 : 0.9;
-    let strokeColor = '#555';
-    let strokeWeight = 1;
+    const nowSec = Date.now() / 1000;
+    const id = feature.getProperty('id') as number;
+    const track = liveTrackSelectors.selectById(store.getState(), id) as LiveTrack;
+    const endIdx = feature.getProperty('endIndex');
+    const ageMin = (nowSec - track.timeSec[endIdx]) / 60;
 
-    if (feature.getProperty('name') && feature.getProperty('name') === this.currentName) {
-      strokeWeight = 3;
-      opacity = 0.9;
-      strokeColor = '#c55';
+    const strokeColor = getUniqueColor(Math.round(id / 1000));
+    let strokeWeight = 1;
+    let zIndex = 10;
+
+    if (id == this.currentId) {
+      strokeWeight = 4;
+    } else if (ageMin < RECENT_TIMEOUT_MIN) {
+      strokeWeight = 2;
+      zIndex = 15;
     }
 
     return {
       strokeColor,
       strokeWeight,
-      strokeOpacity: opacity,
-      fillOpacity: opacity,
-      zIndex: 10,
+      zIndex,
     };
   }
 

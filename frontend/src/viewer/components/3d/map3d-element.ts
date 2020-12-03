@@ -8,7 +8,7 @@ import './line3d-element';
 import './marker3d-element';
 import './controls3d-element';
 
-import { LatLon, LatLonZ, RuntimeTrack } from 'flyxc/common/src/track';
+import { LatLon, LatLonZ, RuntimeTrack } from 'flyxc/common/src/runtime-track';
 import { customElement, html, internalProperty, LitElement, PropertyValues, query, TemplateResult } from 'lit-element';
 import { repeat } from 'lit-html/directives/repeat';
 import { UnsubscribeHandle } from 'micro-typed-events';

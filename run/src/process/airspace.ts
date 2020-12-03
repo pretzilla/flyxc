@@ -2,7 +2,7 @@ import async from 'async';
 import * as protos from 'flyxc/common/protos/track';
 import { Flags, getAspTileUrl, isInFeature } from 'flyxc/common/src/airspaces';
 import { pixelCoordinates } from 'flyxc/common/src/proj';
-import { Point } from 'flyxc/common/src/track';
+import { Point } from 'flyxc/common/src/runtime-track';
 import { VectorTile } from 'mapbox-vector-tile';
 import lru, { Lru } from 'tiny-lru';
 

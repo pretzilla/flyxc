@@ -1,6 +1,6 @@
 import { airspaceColor, Flags, getAspTileUrl, isInFeature, tileId } from 'flyxc/common/src/airspaces';
 import { pixelCoordinates } from 'flyxc/common/src/proj';
-import { LatLon, Point } from 'flyxc/common/src/track';
+import { LatLon, Point } from 'flyxc/common/src/runtime-track';
 import { VectorTile } from 'mapbox-vector-tile';
 
 const TILE_SIZE = 256;

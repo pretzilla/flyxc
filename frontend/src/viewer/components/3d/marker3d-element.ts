@@ -1,11 +1,11 @@
 import type Graphic from 'esri/Graphic';
 import type GraphicsLayer from 'esri/layers/GraphicsLayer';
-import { LatLonZ, RuntimeTrack } from 'flyxc/common/src/track';
+import { sampleAt } from 'flyxc/common/src/math';
+import { LatLonZ, RuntimeTrack } from 'flyxc/common/src/runtime-track';
 import { customElement, internalProperty, LitElement, property, PropertyValues } from 'lit-element';
 import { connect } from 'pwa-helpers';
 
 import { Api } from '../../logic/arcgis';
-import { sampleAt } from '../../logic/math';
 import * as sel from '../../redux/selectors';
 import { RootState, store } from '../../redux/store';
 

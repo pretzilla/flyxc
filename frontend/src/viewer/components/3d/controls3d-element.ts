@@ -6,7 +6,7 @@ import '../name-element';
 import '../upload-element';
 import './exaggeration-element';
 
-import { extractGroupId, RuntimeTrack } from 'flyxc/common/src/track';
+import { extractGroupId, RuntimeTrack } from 'flyxc/common/src/runtime-track';
 import { css, CSSResult, customElement, html, internalProperty, LitElement, TemplateResult } from 'lit-element';
 import { connect } from 'pwa-helpers';
 

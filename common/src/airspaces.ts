@@ -1,6 +1,6 @@
 import { Feature } from 'mapbox-vector-tile';
 
-import { Point } from './track';
+import { Point } from './runtime-track';
 
 // Flags of the airspaces.
 export const enum Flags {

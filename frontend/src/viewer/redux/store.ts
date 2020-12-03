@@ -5,6 +5,7 @@ import { Action, combineReducers, configureStore } from '@reduxjs/toolkit';
 import * as airspace from './airspace-slice';
 import * as app from './app-slice';
 import * as browser from './browser-slice';
+import * as liveTrack from './live-track-slice';
 import * as location from './location-slice';
 import * as planner from './planner-slice';
 import * as track from './track-slice';
@@ -22,6 +23,7 @@ const rootReducer = combineReducers({
   planner: planner.reducer,
   track: track.reducer,
   units: units.reducer,
+  liveTrack: liveTrack.reducer,
 });
 
 export const store = configureStore({

@@ -1,6 +1,7 @@
 import { ticks } from 'd3-array';
 import { airspaceCategory, Flags } from 'flyxc/common/src/airspaces';
-import { RuntimeTrack } from 'flyxc/common/src/track';
+import { sampleAt } from 'flyxc/common/src/math';
+import { RuntimeTrack } from 'flyxc/common/src/runtime-track';
 import {
   css,
   CSSResult,
@@ -17,7 +18,6 @@ import {
 } from 'lit-element';
 import { connect } from 'pwa-helpers';
 
-import { sampleAt } from '../logic/math';
 import { DistanceUnit, formatUnit, SpeedUnit, Units } from '../logic/units';
 import { setAirspacesOnGraph } from '../redux/airspace-slice';
 import { ChartYAxis, setCenterMap, setChartYAxis } from '../redux/app-slice';

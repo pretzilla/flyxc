@@ -1,3 +1,5 @@
+// TODO: update after the live table is changed.
+
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { Datastore } = require('@google-cloud/datastore');
 import express, { Request, Response, Router } from 'express';
